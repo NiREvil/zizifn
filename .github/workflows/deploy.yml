@@ -31,8 +31,11 @@ jobs:
       - name: Deploy via Wrangler Action
         uses: cloudflare/wrangler-action@v3
         with:
-         apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-         accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          vars: |
+            UUID
+            PROXYIP
         env:
-          UUID: ${{ github.event.inputs.uuid || secrets.UUID || 'be0ff9df-1468-41a0-8865-796d1c6800db' }}
-          PROXYIP: ${{ github.event.inputs.proxyip || secrets.PROXYIP || 'di.nscl.ir' }}
+          UUID: ${{ inputs.uuid || secrets.UUID || 'be0ff9df-1468-41a0-8865-796d1c6800db' }}
+          PROXYIP: ${{ inputs.proxyip || secrets.PROXYIP || 'di.nscl.ir' }}
