@@ -144,23 +144,22 @@ async function handleIpSubscription(request, core, userID, hostName, ctx) {
   const mainDomains = [
     hostName,
     "creativecommons.org",
-    "www.speedtest.net",
     "sky.rethinkdns.com",
+    "www.speedtest.net",
     "chat.openai.com",
-    "cfip.xxxxxxxx.tk",
-    "go.inmobi.com",
     "singapore.com",
+    "go.inmobi.com",
     "www.visa.com",
     "www.wto.org",
     "chatgpt.com",
     "medium.com",
-    "npmjs.com",
+    "lb.nscl.ir",
     "nodejs.org",
-    "csgo.com",
-    "harbor.io",
     "linkerd.io",
+    "harbor.io",
+    "npmjs.com",
+    "csgo.com",
     "fbi.gov",
-    "zula.ir",
   ];
 
   const httpsPorts = [443, 8443, 2053, 2083, 2087, 2096];
@@ -263,7 +262,7 @@ async function handleIpSubscription(request, core, userID, hostName, ctx) {
 
   const headers = {
     "Content-Type": "text/plain;charset=utf-8",
-    "Profile-Update-Interval": "9",
+    "Profile-Update-Interval": "8",
     "Subscription-Userinfo": subInfo,
   };
   if (subName) headers["Profile-Title"] = subName;
@@ -523,37 +522,37 @@ async function createDnsPipeline(webSocket, vlessResponseHeader, log) {
 async function handleMyConnection(request, env, ctx) {
   const clientIP = request.headers.get("CF-Connecting-IP") || "127.0.0.1";
   const cf = request.cf || {};
-  const cache = caches.default;
-  const cacheKey = new Request(`https://risk-cache.local/${clientIP}`);
 
   let threatScore = 0;
   let risk = "Low";
 
-  const cached = await cache.match(cacheKey);
-  if (cached) {
-    const cachedData = await cached.json();
-    threatScore = cachedData.threatScore;
-    risk = cachedData.risk;
-  } else {
-    try {
-      const scamalyticsRes = await safeFetch(
-        `https://api.harmonica.workers.dev/api/${clientIP}`,
-        {},
-        4000,
-      );
-      if (scamalyticsRes.ok) {
-        const data = await scamalyticsRes.json();
-        if (data.success) {
-          threatScore = data.fraud_score || 0;
-          risk = data.risk.charAt(0).toUpperCase() + data.risk.slice(1);
+  try {
+    const harmonicaRes = await safeFetch(
+      `https://api.harmonica.workers.dev/api/${clientIP}`,
+      {
+        headers: {
+          "User-Agent":
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+          Accept: "application/json",
+        },
+      },
+      4000,
+    );
+
+    if (harmonicaRes.ok) {
+      const data = await harmonicaRes.json();
+
+      if (data) {
+        const targetObj = data.info || data;
+
+        threatScore = targetObj.score ?? targetObj.fraud_score ?? targetObj.threatScore ?? 0;
+
+        if (targetObj.risk) {
+          risk = targetObj.risk.charAt(0).toUpperCase() + targetObj.risk.slice(1);
         }
       }
-      const cacheResponse = new Response(JSON.stringify({ threatScore, risk }), {
-        headers: { "Cache-Control": "public, max-age=8600" },
-      });
-      ctx.waitUntil(cache.put(cacheKey, cacheResponse));
-    } catch (e) {}
-  }
+    }
+  } catch (e) {}
 
   const headers = {
     "Content-Type": "application/json",
@@ -637,10 +636,19 @@ async function handleConfigPage(userID, hostName, proxyAddress) {
       .replace(/{{PROXY_ADDRESS}}/g, proxyAddress)
       .replace(/{{CONFIG_DREAM}}/g, dream)
       .replace(/{{CONFIG_FREEDOM}}/g, freedom)
-      .replace(/{{URL_HIDDIFY}}/g, `hiddify://install-config?url=${encodeURIComponent(subXrayUrlH)}`)
+      .replace(
+        /{{URL_HIDDIFY}}/g,
+        `hiddify://install-config?url=${encodeURIComponent(subXrayUrlH)}`,
+      )
       .replace(/{{URL_V2RAYNG}}/g, `v2rayng://install-config?url=${subXrayUrlV}`)
-      .replace(/{{URL_CLASH}}/g, `clash://install-config?url=${encodeURIComponent(`https://revil-sub.pages.dev/sub/clash-meta?url=${subSbUrl}`)}`,)
-      .replace(/{{URL_EXCLAVE}}/g, `sn://subscription?url=${encodeURIComponent(subSbUrl)}&name=${encodedSubName}`,);
+      .replace(
+        /{{URL_CLASH}}/g,
+        `clash://install-config?url=${encodeURIComponent(`https://revil-sub.pages.dev/sub/clash-meta?url=${subSbUrl}`)}`,
+      )
+      .replace(
+        /{{URL_EXCLAVE}}/g,
+        `sn://subscription?url=${encodeURIComponent(subSbUrl)}&name=${encodedSubName}`,
+      );
 
     return new Response(finalHTML, { headers: { "Content-Type": "text/html; charset=utf-8" } });
   } catch (error) {
