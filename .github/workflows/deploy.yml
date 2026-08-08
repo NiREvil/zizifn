@@ -6,21 +6,25 @@ on:
       - main
   workflow_dispatch:
     inputs:
+      workername:
+        description: 'Optional: Enter a specific Worker name for this run (lowercase only)'
+        required: false
+        default: '0x00'
       proxyip:
-        description: 'Optional: Enter a specific Proxy IP for this run'
+        description: 'Optional: Enter a specific Proxy IP/host for this run'
         required: false
         default: 'di.nscl.ir'
       uuid:
-        description: 'Optional: Enter a specific UUID for this run'
+        description: 'Optional: Enter a specific UUID for this run (leave blank to generate a random one)'
         required: false
-        default: 'be0ff9df-1468-41a0-8865-796d1c6800db'
+        default: ''
 
 jobs:
   deploy:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -28,14 +32,99 @@ jobs:
       - name: Install wasm-pack
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
 
-      - name: Deploy via Wrangler Action
-        uses: cloudflare/wrangler-action@v3
+      - name: Resolve UUID
+        id: uuidval
+        env:
+          INPUT_UUID: ${{ inputs.uuid }}
+          SECRET_UUID: ${{ secrets.UUID }}
+        run: |
+          UUID_REGEX="^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+          FALLBACK_UUID="be0ff9df-1468-41a0-8865-796d1c6800db"
+
+          if [ -n "$INPUT_UUID" ]; then
+            UUID_VALUE="$INPUT_UUID"
+          elif [ -n "$SECRET_UUID" ]; then
+            UUID_VALUE="$SECRET_UUID"
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            UUID_VALUE=$(curl -s --max-time 5 https://www.uuidgenerator.net/api/version4 | tr -d '\n\r ')
+            if ! [[ "$UUID_VALUE" =~ $UUID_REGEX ]]; then
+              UUID_VALUE="$FALLBACK_UUID"
+            fi
+          else
+            UUID_VALUE="$FALLBACK_UUID"
+          fi
+
+          if ! [[ "$UUID_VALUE" =~ $UUID_REGEX ]]; then
+            UUID_VALUE="$FALLBACK_UUID"
+          fi
+
+          echo "::add-mask::$UUID_VALUE"
+          echo "uuid=$UUID_VALUE" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve PROXYIP
+        id: proxyval
+        env:
+          INPUT_PROXYIP: ${{ inputs.proxyip }}
+          SECRET_PROXYIP: ${{ secrets.PROXYIP }}
+        run: |
+          if [ -n "$INPUT_PROXYIP" ]; then
+            PROXY_VALUE="$INPUT_PROXYIP"
+          elif [ -n "$SECRET_PROXYIP" ]; then
+            PROXY_VALUE="$SECRET_PROXYIP"
+          else
+            PROXY_VALUE="di.nscl.ir"
+          fi
+          echo "proxyip=$PROXY_VALUE" >> "$GITHUB_OUTPUT"
+          echo "PROXYIP in use: \`$PROXY_VALUE\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Resolve worker name
+        id: worker
+        run: |
+          DEFAULT_NAME=$(grep -m1 '^name' wrangler.toml | sed -E 's/name[[:space:]]*=[[:space:]]*"(.*)"/\1/')
+          NAME="${{ inputs.workername }}"
+          if [ -z "$NAME" ]; then NAME="$DEFAULT_NAME"; fi
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "### Deploying worker: \`$NAME\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: "Deploy via Wrangler Action (${{ steps.worker.outputs.name }})"
+        id: deploy
+        uses: cloudflare/wrangler-action@v4
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: deploy --name ${{ steps.worker.outputs.name }}
           vars: |
             UUID
             PROXYIP
         env:
-          UUID: ${{ inputs.uuid || secrets.UUID || 'be0ff9df-1468-41a0-8865-796d1c6800db' }}
-          PROXYIP: ${{ inputs.proxyip || secrets.PROXYIP || 'di.nscl.ir' }}
+          UUID: ${{ steps.uuidval.outputs.uuid }}
+          PROXYIP: ${{ steps.proxyval.outputs.proxyip }}
+
+      - name: Show worker URL
+        run: |
+          BASE_URL="${{ steps.deploy.outputs.deployment-url }}"
+          BASE_URL="${BASE_URL%/}"
+          {
+            echo ""
+            echo "## ✅ Deployment Successful."
+            echo ""
+            echo "| | |"
+            echo "|---|----|"
+            echo "| **Worker name** | \`${{ steps.worker.outputs.name }}\` |"
+            echo "| **Base URL** | $BASE_URL |"
+            echo ""
+            echo "> [!WARNING]"
+            echo ">"
+            echo "> 🔒 This repo is public, so the UUID is never printed in these logs."
+            echo ">"
+            echo "> To access the panel, you need your UUID:"
+            echo "> \`$BASE_URL/<UUID>\`"
+            echo ">"
+            echo "> Open your Cloudflare dashboard:"
+            echo ">"
+            echo "> Compute → Workers & Pages → **${{ steps.worker.outputs.name }}** → Settings → Variables and Secrets"
+            echo ">"
+            echo "> Copy your own **UUID**."
+            echo ">"
+            echo "> **[🪩 Click here to log in to Cloudflare](https://dash.cloudflare.com/?to=/:account/workers-and-pages)**"
+          } >> "$GITHUB_STEP_SUMMARY"
