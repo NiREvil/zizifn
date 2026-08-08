@@ -4,7 +4,7 @@ import init, { processVlessHeader } from "./pkg/zr_wasm.js";
 import wasm from "./pkg/zr_wasm_bg.wasm";
 
 const decodeSecure = (encoded) => atob(encoded);
-const HTML_URL = "https://NiREvil.github.io/zizifn/";
+const HTML_URL = "https://NiREvil.github.io/zizifn";
 
 const Config = {
   userID: "be0ff9df-1468-41a0-8865-796d1c6800db",
@@ -40,6 +40,20 @@ const CONST = {
   VLESS_PROTOCOL: decodeSecure("dmxlc3M="),
   WS_READY_STATE_OPEN: 1,
   WS_READY_STATE_CLOSING: 2,
+  CIPHER_SUITES:
+    "TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:TLS_AES_128_GCM_SHA256:TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384:TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384:TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256:TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256:TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256:TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256:TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA:TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA:TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256:TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256",
+  FINAL_MASK: JSON.stringify({
+    tcp: [
+      {
+        type: "fragment",
+        settings: { packets: "tlshello", lengths: ["5", "94", "1"], delays: ["0"], maxSplit: "0" },
+      },
+      {
+        type: "fragment",
+        settings: { packets: "1-1", lengths: ["109", "1"], delays: ["1"], maxSplit: "355" },
+      },
+    ],
+  }),
 };
 
 function generateRandomPath(length = 28, query = "") {
@@ -58,12 +72,6 @@ const CORE_PRESETS = {
       security: "tls",
       fp: "chrome",
       alpn: "http/1.1",
-      extra: {},
-    },
-    tcp: {
-      path: () => generateRandomPath(12, "ed=2560"),
-      security: "none",
-      fp: "chrome",
       extra: {},
     },
   },
@@ -99,6 +107,7 @@ function createVlessLink({
   fp,
   alpn,
   extra = {},
+  enhanced = false,
   name,
 }) {
   const params = new URLSearchParams({ type: decodeSecure("d3M="), host, path });
@@ -108,11 +117,15 @@ function createVlessLink({
   if (sni) params.set("sni", sni);
   if (fp) params.set("fp", fp);
   if (alpn) params.set("alpn", alpn);
+  if (enhanced) {
+    params.set("cs", CONST.CIPHER_SUITES);
+    params.set("fm", CONST.FINAL_MASK);
+  }
   for (const [k, v] of Object.entries(extra)) params.set(k, v);
   return `${CONST.VLESS_PROTOCOL}://${userID}@${address}:${port}?${params.toString()}#${encodeURIComponent(name)}`;
 }
 
-function buildLink({ core, proto, userID, hostName, address, port, tag }) {
+function buildLink({ core, proto, userID, hostName, address, port, tag, enhanced = false }) {
   const p = CORE_PRESETS[core][proto];
   return createVlessLink({
     userID,
@@ -122,23 +135,27 @@ function buildLink({ core, proto, userID, hostName, address, port, tag }) {
     path: p.path(),
     security: p.security,
     sni: p.security === "tls" ? hostName : undefined,
-    fp: p.fp,
+    fp: enhanced ? "unsafe" : p.fp,
     alpn: p.alpn,
     extra: p.extra,
-    name: makeName(tag, proto),
+    enhanced,
+    name: makeName(tag, proto) + (enhanced ? "-Enhanced" : ""),
   });
 }
 
 const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
 
-async function handleIpSubscription(request, core, userID, hostName, ctx) {
+function isInIgnoredRange(ip) {
+  return ip.startsWith("198.41.208.");
+}
+
+async function handleIpSubscription(request, core, userID, hostName, ctx, enhanced = false) {
   const url = new URL(request.url);
   const subName = url.searchParams.get("name");
   const CAKE_INFO = {
     total_TB: 380,
     base_GB: 42000,
     daily_growth_GB: 250,
-    expire_date: "2038-4-20",
   };
 
   const mainDomains = [
@@ -146,7 +163,6 @@ async function handleIpSubscription(request, core, userID, hostName, ctx) {
     "creativecommons.org",
     "sky.rethinkdns.com",
     "www.speedtest.net",
-    "chat.openai.com",
     "singapore.com",
     "go.inmobi.com",
     "www.visa.com",
@@ -160,12 +176,28 @@ async function handleIpSubscription(request, core, userID, hostName, ctx) {
     "npmjs.com",
     "csgo.com",
     "fbi.gov",
+    "ip.sb",
+    "time.is",
+    "icook.hk",
+    "codepen.io",
+    "unpkg.com",
+    "jsdelivr.com",
+    "chatgpt.com",
+    "www.cdnjs.com",
+    "auth.vercel.com",
+    "www.udacity.com",
+    "www.gitbook.com",
+    "www.ipaddress.my",
+    "www.glassdoor.com",
+    "www.ipchicken.com",
+    "static.cloudflareinsights.com",
   ];
 
   const httpsPorts = [443, 8443, 2053, 2083, 2087, 2096];
   const httpPorts = [80, 8080, 8880, 2052, 2082, 2086, 2095];
   let links = [];
   const isPagesDeployment = hostName.endsWith(".pages.dev");
+  const includeTcp = core === "sb" && !isPagesDeployment;
 
   mainDomains.forEach((domain, i) => {
     links.push(
@@ -177,9 +209,10 @@ async function handleIpSubscription(request, core, userID, hostName, ctx) {
         address: domain,
         port: pick(httpsPorts),
         tag: `Domain${i + 1}`,
+        enhanced,
       }),
     );
-    if (!isPagesDeployment) {
+    if (includeTcp) {
       links.push(
         buildLink({
           core,
@@ -215,7 +248,10 @@ async function handleIpSubscription(request, core, userID, hostName, ctx) {
 
     if (response) {
       const json = await response.json();
-      const ips = [...(json.ipv4 || []), ...(json.ipv6 || [])].slice(0, 20).map((x) => x.ip);
+      const ips = [...(json.ipv4 || []), ...(json.ipv6 || [])]
+        .map((x) => x.ip)
+        .filter((ip) => !isInIgnoredRange(ip))
+        .slice(0, 20);
       ips.forEach((ip, i) => {
         const formattedAddress = ip.includes(":") ? `[${ip}]` : ip;
         links.push(
@@ -227,9 +263,10 @@ async function handleIpSubscription(request, core, userID, hostName, ctx) {
             address: formattedAddress,
             port: pick(httpsPorts),
             tag: `IP${i + 1}`,
+            enhanced,
           }),
         );
-        if (!isPagesDeployment) {
+        if (includeTcp) {
           links.push(
             buildLink({
               core,
@@ -625,6 +662,7 @@ async function handleConfigPage(userID, hostName, proxyAddress) {
   const encodedSubName = encodeURIComponent("INDEX");
   const subXrayUrlH = `https://${hostName}/xray/${userID}?name=${encodedSubName}`;
   const subXrayUrlV = `https://${hostName}/xray/${userID}#${encodedSubName}`;
+  const subXrayUrlVEnhanced = `https://${hostName}/xray-enhanced/${userID}#${encodedSubName}`;
   const subSbUrl = `https://${hostName}/sb/${userID}?name=${encodedSubName}`;
 
   try {
@@ -641,6 +679,7 @@ async function handleConfigPage(userID, hostName, proxyAddress) {
         `hiddify://install-config?url=${encodeURIComponent(subXrayUrlH)}`,
       )
       .replace(/{{URL_V2RAYNG}}/g, `v2rayng://install-config?url=${subXrayUrlV}`)
+      .replace(/{{URL_V2RAYNG_ENHANCED}}/g, `v2rayng://install-config?url=${subXrayUrlVEnhanced}`)
       .replace(
         /{{URL_CLASH}}/g,
         `clash://install-config?url=${encodeURIComponent(`https://revil-sub.pages.dev/sub/clash-meta?url=${subSbUrl}`)}`,
@@ -679,8 +718,10 @@ export default {
 
       if (url.pathname === "/resolve-domain") return handleResolveDomain(request);
       if (url.pathname === "/my-connection") return handleMyConnection(request, env, ctx);
+      if (url.pathname.startsWith(`/xray-enhanced/${cfg.userID}`))
+        return handleIpSubscription(request, "xray", cfg.userID, url.hostname, ctx, true);
       if (url.pathname.startsWith(`/xray/${cfg.userID}`))
-        return handleIpSubscription(request, "xray", cfg.userID, url.hostname, ctx);
+        return handleIpSubscription(request, "xray", cfg.userID, url.hostname, ctx, false);
       if (url.pathname.startsWith(`/sb/${cfg.userID}`))
         return handleIpSubscription(request, "sb", cfg.userID, url.hostname, ctx);
       if (url.pathname.startsWith(`/${cfg.userID}`))

@@ -707,7 +707,7 @@
               </svg></span>
             <span class="button-text">Import to Hiddify</span>
           </a>
-          <a href="{{URL_V2RAYNG}}" id="v2rayng-import-btn" class="button client-btn" data-copy-url="{{URL_V2RAYNG}}" aria-label="Import to V2rayNG, long press to copy link">
+          <a href="{{URL_V2RAYNG}}" id="v2rayng-import-btn" class="button client-btn" data-copy-url="{{URL_V2RAYNG}}" data-copy-url-enhanced="{{URL_V2RAYNG_ENHANCED}}" aria-label="Import to V2rayNG, long press to copy link">
             <span class="client-icon"><svg viewBox="0 0 24 24">
                 <path d="M12 2L4 6v6c0 5 3.4 9.4 8 11 4.6-1.6 8-6 8-11V6l-8-4z" />
                 <path d="M9 12l2 2 4-4" />
@@ -766,7 +766,7 @@
       <span id="open-custom-ips" class="custom-routing-trigger" role="button" tabindex="0">➔ Define Custom Clean IPs</span>
 
       <div class="footer">
-        <p>© <span id="current-year"></span> <b><a href="https://github.com/NiREvil/zizifn" target="_blank" rel="noopener noreferrer">REvil, Freedom to Dream</a></b></p>
+        <p>© <span id="current-year"></span> REvil, <b><a href="https://github.com/NiREvil/zizifn" target="_blank" rel="noopener noreferrer">Freedom to Dream</a></b></p>
       </div>
 
       <div id="hiddify-dns-modal" class="modal-overlay" style="display: none" role="dialog" aria-modal="true" aria-labelledby="hiddify-modal-title">
@@ -775,6 +775,17 @@
           <p class="modal-text">For the configuration to work correctly, you need to change the <strong>Remote DNS</strong> setting/DNS in the Hiddify app.</p>
           <div class="modal-instruction">Change from: <code>tcp://8.8.8.8</code><br />To: <code>https://8.8.8.8/dns-query</code></div>
           <button id="hiddify-modal-continue" class="button client-btn">Continue to Hiddify</button>
+        </div>
+      </div>
+      
+      <div id="v2rayng-choice-modal" class="modal-overlay" style="display: none" role="dialog" aria-modal="true" aria-labelledby="v2rayng-choice-title">
+        <div class="modal-content">
+          <h3 id="v2rayng-choice-title" class="modal-title">Choose Config Type</h3>
+          <p class="modal-text">Select the subscription type you want to import into v2rayNG OR <a href="https://github.com/patterniha/v2rayNG" target="_blank" rel="noopener noreferrer">PattNG</a>.</p>
+          <div class="modal-btn-group">
+            <button id="v2rayng-choice-normal" class="button client-btn">Normal</button>
+            <button id="v2rayng-choice-enhanced" class="button client-btn">Enhanced</button>
+          </div>
         </div>
       </div>
 
@@ -1128,6 +1139,27 @@
           const hiddifyBtn = document.getElementById("hiddify-import-btn");
           const modal = document.getElementById("hiddify-dns-modal");
           const continueBtn = document.getElementById("hiddify-modal-continue");
+          const v2rayngModal = document.getElementById("v2rayng-choice-modal");
+          const v2rayngNormalBtn = document.getElementById("v2rayng-choice-normal");
+          const v2rayngEnhancedBtn = document.getElementById("v2rayng-choice-enhanced");
+          const v2rayngImportBtn = document.getElementById("v2rayng-import-btn");
+          const closeV2rayngModal = () => {
+            v2rayngModal.classList.remove("visible");
+            setTimeout(() => (v2rayngModal.style.display = "none"), 300);
+          };
+          if (v2rayngModal && v2rayngNormalBtn && v2rayngEnhancedBtn && v2rayngImportBtn) {
+            v2rayngNormalBtn.addEventListener("click", () => {
+              closeV2rayngModal();
+              attemptV2rayNgLaunch(v2rayngImportBtn.getAttribute("data-copy-url"));
+            });
+            v2rayngEnhancedBtn.addEventListener("click", () => {
+              closeV2rayngModal();
+              attemptV2rayNgLaunch(v2rayngImportBtn.getAttribute("data-copy-url-enhanced"));
+            });
+            v2rayngModal.addEventListener("click", (event) => {
+              if (event.target === v2rayngModal) closeV2rayngModal();
+            });
+          }
           const flashFeedback = (el, ok) => {
             el.classList.add(ok ? "copied" : "error");
             setTimeout(() => el.classList.remove(ok ? "copied" : "error"), 1200);
@@ -1143,7 +1175,8 @@
                 }
                 if (el.id === "v2rayng-import-btn") {
                   e.preventDefault();
-                  attemptV2rayNgLaunch(el.getAttribute("data-copy-url"));
+                  v2rayngModal.style.display = "flex";
+                  setTimeout(() => v2rayngModal.classList.add("visible"), 10);
                 }
               },
               onLongPress: () => {
