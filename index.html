@@ -3073,7 +3073,6 @@
           .map((line) => line.trim())
           .filter((line) => line !== "");
         const xrayBase = document.getElementById("xray-config")?.textContent || "";
-        const sbBase = document.getElementById("pattng-config")?.dataset.raw || "";
         let customConfigs = [];
         lines.forEach((ip, index) => {
           let host = ip;
@@ -3095,13 +3094,6 @@
               makeClientConfigName(xrayBase, `Clean${index + 1}-Xray`),
             );
             customConfigs.push(xrFinal);
-            const sbFinal = rebuildVlessLink(
-              sbBase,
-              host,
-              port,
-              makeClientConfigName(sbBase, `Clean${index + 1}-Singbox`),
-            );
-            customConfigs.push(sbFinal);
           } catch (e) {
             console.error("Link generation failed for custom route:", e);
           }
