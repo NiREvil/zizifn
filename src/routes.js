@@ -540,6 +540,16 @@ function buildProxyEntryConfigs(entry, hostName, userID, index) {
     tag,
     overrides: { proxyIP },
   });
+  const xrayNormal = buildLink({
+    core: "xray",
+    proto: xrayPort.proto,
+    userID,
+    hostName,
+    address: hostName,
+    port: xrayPort.port,
+    tag,
+    overrides: { proxyIP },
+  });
   const sb = buildLink({
     core: "sb",
     proto: sbPort.proto,
@@ -556,6 +566,7 @@ function buildProxyEntryConfigs(entry, hostName, userID, index) {
     hostType: entry.hostType,
     risk: entry.risk,
     score: entry.score,
+    xrayNormalLink: xrayNormal,
     configs: [
       { label: "Xray", link: xray },
       { label: "Singbox", link: sb },
@@ -695,6 +706,28 @@ export async function handleConfigPage(userID, hostName, proxyAddress, workerNam
     tag: "NAT64",
     overrides: { nat64: false },
   });
+  const nat64OnEnhanced = buildLink({
+    core: "xray",
+    proto: "tls",
+    userID,
+    hostName,
+    address: hostName,
+    port: 443,
+    tag: "NAT64",
+    enhanced: true,
+    overrides: { nat64: true },
+  });
+  const nat64OffEnhanced = buildLink({
+    core: "xray",
+    proto: "tls",
+    userID,
+    hostName,
+    address: hostName,
+    port: 443,
+    tag: "NAT64",
+    enhanced: true,
+    overrides: { nat64: false },
+  });
 
   const settingsUrl = buildSettingsUrl(workerName);
   const workerLabel = hostName.split(".")[0] || "0x00";
@@ -712,8 +745,10 @@ export async function handleConfigPage(userID, hostName, proxyAddress, workerNam
     .replace(/{{CONFIG_FREEDOM}}/g, freedom)
     .replace(/{{CONFIG_PATTNG}}/g, pattng)
     .replace(/{{NAT64_DEFAULT}}/g, nat64 ? "on" : "off")
-    .replace(/{{CONFIG_NAT64_ON}}/g, nat64On)
-    .replace(/{{CONFIG_NAT64_OFF}}/g, nat64Off)
+    .replace(/{{CONFIG_NAT64_ON_NORMAL}}/g, nat64On)
+    .replace(/{{CONFIG_NAT64_ON_ENHANCED}}/g, nat64OnEnhanced)
+    .replace(/{{CONFIG_NAT64_OFF_NORMAL}}/g, nat64Off)
+    .replace(/{{CONFIG_NAT64_OFF_ENHANCED}}/g, nat64OffEnhanced)
     .replace(/{{URL_PROXYIPS}}/g, subProxyIpsUrl)
     .replace(/{{URL_WORKER_SETTINGS}}/g, settingsUrl)
     .replace(/{{URL_V2RAYNG_ENHANCED}}/g, `${SENS.v2rayng()}${subXrayUrlVEnhanced}`)
