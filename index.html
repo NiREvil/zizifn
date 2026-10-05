@@ -1985,7 +1985,7 @@
       <div class="config-card">
         <div class="config-title">
           <span>Xray Core Clients</span>
-          <button class="icon-btn" aria-label="Copy configuration" title="Copy configuration" onclick="copyToClipboard(this, '{{CONFIG_DREAM}}')">
+          <button id="xray-copy-btn" class="icon-btn" aria-label="Copy configuration" title="Copy configuration">
             <svg class="copy-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
               <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
@@ -2315,7 +2315,7 @@
       function showCopyToast(lines) {
         const toast = document.createElement("div");
         toast.style.cssText =
-          "position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#333;color:#fff;padding:10px 20px;border-radius:5px;z-index:9999;text-align:center;line-height:1.5;max-width:90vw;";
+          "position:fixed;top:20px;left:50%;transform:translateX(-50%);background:#333;color:#fff;padding:10px 20px;border-radius:5px;z-index:9999;text-align:center;line-height:1.5;max-width:90vw;";
         toast.innerHTML = lines
           .map((line, i) =>
             i === 0
@@ -3073,7 +3073,9 @@
           .map((line) => line.trim())
           .filter((line) => line !== "");
         const xrayBase = document.getElementById("xray-config")?.textContent || "";
+        const enhancedBase = document.getElementById("pattng-config")?.textContent.trim() || "";
         let customConfigs = [];
+        let enhancedConfigs = [];
         lines.forEach((ip, index) => {
           let host = ip;
           let port = "443";
@@ -3094,6 +3096,16 @@
               makeClientConfigName(xrayBase, `Clean${index + 1}-Xray`),
             );
             customConfigs.push(xrFinal);
+            if (enhancedBase) {
+              enhancedConfigs.push(
+                rebuildVlessLink(
+                  enhancedBase,
+                  host,
+                  port,
+                  makeClientConfigName(enhancedBase, `Clean${index + 1}-Xray-Enhanced`),
+                ),
+              );
+            }
           } catch (e) {
             console.error("Link generation failed for custom route:", e);
           }
@@ -3103,7 +3115,14 @@
           pre.textContent = outputText;
           card.style.display = "block";
           document.getElementById("btn-copy-custom").onclick = function () {
-            copyToClipboard(this, outputText);
+            openXrayChoiceModal((enhanced) => {
+              const text = (enhanced ? enhancedConfigs : customConfigs).join("\n");
+              if (!text) return;
+              copyToClipboard(this, text);
+              const lines = configCopiedToastLines(customConfigs.length);
+              if (enhanced) lines.push(pattngCopyToastLine(customConfigs.length));
+              showCopyToast(lines);
+            }, `Select the config type you want to copy for the custom clean IPs ${XRAY_CHOICE_MODAL_TEXT_PATTNG}`);
           };
         } else {
           card.style.display = "none";
@@ -3378,6 +3397,16 @@
             button.classList.toggle("active", button.dataset.preset === "default");
           });
           refreshPattng(originalPattngRaw, pattngPre);
+        });
+        document.getElementById("xray-copy-btn")?.addEventListener("click", function () {
+          openXrayChoiceModal((enhanced) => {
+            const raw = document.getElementById(enhanced ? "pattng-config" : "xray-config")?.textContent.trim();
+            if (!raw) return;
+            copyToClipboard(this, raw);
+            const lines = configCopiedToastLines(1);
+            if (enhanced) lines.push(pattngCopyToastLine(1));
+            showCopyToast(lines);
+          }, `Select the config type you want to copy ${XRAY_CHOICE_MODAL_TEXT_PATTNG}`);
         });
         document.getElementById("copy-pattng-btn")?.addEventListener("click", function () {
           copyToClipboard(this, pattngPre?.dataset.raw || "");
