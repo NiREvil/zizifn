@@ -1,0 +1,3 @@
+name = "syncc-1101-debug-baseline"
+main = "debug/worker-minimal.js"
+compatibility_date = "2025-09-01"
