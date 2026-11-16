@@ -2,17 +2,14 @@ name = "0x00"
 main = "index.js"
 compatibility_date = "2025-09-01"
 
-[build]
-command = "wasm-pack build --target web"
-
 [[rules]]
-type = "CompiledWasm"
-globs = ["**/*.wasm"]
-fallthrough = false
+type = "Text"
+globs = ["**/*.html", "**/*.b64"]
+fallthrough = true
 
 [[rules]]
 type = "Text"
-globs = ["**/*.b64"]
+globs = ["**/*.html", "**/*.b64"]
 fallthrough = true
 
 #[observability]
@@ -31,5 +28,5 @@ fallthrough = true
 #head_sampling_rate = 1
 #persist = true
 
-#[observability.issue_detection]
+#[observability.issues]
 #enabled = true
