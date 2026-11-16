@@ -1,9 +1,9 @@
 name: ☁️ Deploy Worker
 
 on:
-  push:
-    branches:
-      - main
+#  push:
+#    branches:
+#      - main
   workflow_dispatch:
     inputs:
       account_1:
@@ -33,7 +33,7 @@ on:
       proxyip:
         description: "Optional: Enter a specific Proxy IP/host for this run"
         required: false
-        default: di.nscl.ir
+        default: ""
       uuid:
         description: "Optional: Enter a specific UUID for this run (leave blank to generate a random one)"
         required: false
@@ -54,7 +54,7 @@ concurrency:
 jobs:
   plan:
     runs-on: ubuntu-26.04
-    timeout-minutes: 10
+    timeout-minutes: 5
     outputs:
       matrix: ${{ steps.build.outputs.matrix }}
     steps:
@@ -96,17 +96,6 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache Rust build
-        uses: Swatinem/rust-cache@v2
-
-      - name: Install wasm-pack
-        uses: taiki-e/install-action@v2
-        with:
-          tool: wasm-pack
 
       - name: Resolve account credentials (#${{ matrix.index }})
         id: account
@@ -187,7 +176,7 @@ jobs:
 
           if [ "$INPUT_ENABLE" = "true" ] || [ "$SECRET_ENABLE" = "true" ]; then
             KEY="region"
-            VALUE="gcp:us-central1"
+            VALUE="gcp:us-west2"
             SUMMARY="Enabled (Google AI Studio support — gcp:us-central1)"
           fi
 
@@ -229,13 +218,27 @@ jobs:
             echo "${{ steps.placementval.outputs.key }} = \"${{ steps.placementval.outputs.value }}\""
           } >> wrangler.toml
 
+      - name: Setup Node.js (for wrangler dry-run)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install wrangler
+        run: npm install -g wrangler@4
+
+      - name: Build and Obfuscate Worker Bundle
+        run: |
+          npx wrangler deploy --dry-run --outdir dist
+          node scripts/obfuscate.js dist/index.js
+
       - name: "Deploy via Wrangler Action (${{ steps.worker.outputs.name }} → ${{ steps.account.outputs.label }})"
         id: deploy
         uses: cloudflare/wrangler-action@v4
         with:
           apiToken: ${{ matrix.index == 1 && secrets.CLOUDFLARE_API_TOKEN || secrets[format('CLOUDFLARE_API_TOKEN_{0}', matrix.index)] }}
           accountId: ${{ matrix.index == 1 && secrets.CLOUDFLARE_ACCOUNT_ID || secrets[format('CLOUDFLARE_ACCOUNT_ID_{0}', matrix.index)] }}
-          command: deploy --name ${{ steps.worker.outputs.name }}
+          wranglerVersion: "4.86.0"
+          command: deploy worker.js --name ${{ steps.worker.outputs.name }}
           vars: |
             UUID
             PROXYIP
