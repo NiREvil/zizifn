@@ -1,8 +1,201 @@
 import { connect } from "cloudflare:sockets";
-import { processHeader } from "../pkg/zr_wasm.js";
 import { CONST, safeFetch } from "./core.js";
 
 const IPV4_REGEX = /^\d{1,3}(\.\d{1,3}){3}$/;
+
+const byteToHex = Array.from({ length: 256 }, (_, i) => (i + 0x100).toString(16).slice(1));
+
+function unsafeStringify(arr, offset = 0) {
+  return (
+    byteToHex[arr[offset]] +
+    byteToHex[arr[offset + 1]] +
+    byteToHex[arr[offset + 2]] +
+    byteToHex[arr[offset + 3]] +
+    "-" +
+    byteToHex[arr[offset + 4]] +
+    byteToHex[arr[offset + 5]] +
+    "-" +
+    byteToHex[arr[offset + 6]] +
+    byteToHex[arr[offset + 7]] +
+    "-" +
+    byteToHex[arr[offset + 8]] +
+    byteToHex[arr[offset + 9]] +
+    "-" +
+    byteToHex[arr[offset + 10]] +
+    byteToHex[arr[offset + 11]] +
+    byteToHex[arr[offset + 12]] +
+    byteToHex[arr[offset + 13]] +
+    byteToHex[arr[offset + 14]] +
+    byteToHex[arr[offset + 15]]
+  ).toLowerCase();
+}
+
+export function parseHeader(chunk, userIDs) {
+  const bytes = chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk);
+  if (bytes.byteLength < 24) {
+    return {
+      has_error: true,
+      message: "invalid data",
+      address_remote: "",
+      port_remote: 0,
+      raw_data_index: 0,
+      is_udp: false,
+      version: 0,
+    };
+  }
+
+  const version = bytes[0];
+  const clientUUID = unsafeStringify(bytes, 1);
+  const uuids = (userIDs || "").split(",").map((id) => id.trim().toLowerCase());
+  const isValidUser = uuids.includes(clientUUID);
+
+  if (!isValidUser) {
+    return {
+      has_error: true,
+      message: "invalid user",
+      address_remote: "",
+      port_remote: 0,
+      raw_data_index: 0,
+      is_udp: false,
+      version,
+    };
+  }
+
+  const optLength = bytes[17];
+  const commandIndex = 18 + optLength;
+  if (bytes.byteLength <= commandIndex) {
+    return {
+      has_error: true,
+      message: "invalid data",
+      address_remote: "",
+      port_remote: 0,
+      raw_data_index: 0,
+      is_udp: false,
+      version,
+    };
+  }
+
+  const command = bytes[commandIndex];
+  if (command !== 1 && command !== 2) {
+    return {
+      has_error: true,
+      message: `command ${command} is not supported`,
+      address_remote: "",
+      port_remote: 0,
+      raw_data_index: 0,
+      is_udp: false,
+      version,
+    };
+  }
+  const isUdp = command === 2;
+
+  const portIndex = commandIndex + 1;
+  if (bytes.byteLength < portIndex + 3) {
+    return {
+      has_error: true,
+      message: "invalid data",
+      address_remote: "",
+      port_remote: 0,
+      raw_data_index: 0,
+      is_udp: isUdp,
+      version,
+    };
+  }
+
+  const portRemote = (bytes[portIndex] << 8) | bytes[portIndex + 1];
+  const addressType = bytes[portIndex + 2];
+  let currentIdx = portIndex + 3;
+  let addressRemote = "";
+
+  switch (addressType) {
+    case 1: { // IPv4
+      if (bytes.byteLength < currentIdx + 4) {
+        return {
+          has_error: true,
+          message: "invalid data",
+          address_remote: "",
+          port_remote: portRemote,
+          raw_data_index: 0,
+          is_udp: isUdp,
+          version,
+        };
+      }
+      addressRemote = `${bytes[currentIdx]}.${bytes[currentIdx + 1]}.${bytes[currentIdx + 2]}.${bytes[currentIdx + 3]}`;
+      currentIdx += 4;
+      break;
+    }
+    case 2: { // Domain
+      if (bytes.byteLength < currentIdx + 1) {
+        return {
+          has_error: true,
+          message: "invalid data",
+          address_remote: "",
+          port_remote: portRemote,
+          raw_data_index: 0,
+          is_udp: isUdp,
+          version,
+        };
+      }
+      const addressLength = bytes[currentIdx];
+      currentIdx += 1;
+      if (bytes.byteLength < currentIdx + addressLength) {
+        return {
+          has_error: true,
+          message: "invalid data",
+          address_remote: "",
+          port_remote: portRemote,
+          raw_data_index: 0,
+          is_udp: isUdp,
+          version,
+        };
+      }
+      addressRemote = new TextDecoder().decode(bytes.slice(currentIdx, currentIdx + addressLength));
+      currentIdx += addressLength;
+      break;
+    }
+    case 3: { // IPv6
+      if (bytes.byteLength < currentIdx + 16) {
+        return {
+          has_error: true,
+          message: "invalid data",
+          address_remote: "",
+          port_remote: portRemote,
+          raw_data_index: 0,
+          is_udp: isUdp,
+          version,
+        };
+      }
+      const segments = [];
+      const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      for (let i = 0; i < 8; i++) {
+        segments.push(view.getUint16(currentIdx + i * 2).toString(16));
+      }
+      addressRemote = segments.join(":");
+      currentIdx += 16;
+      break;
+    }
+    default:
+      return {
+        has_error: true,
+        message: `invalid addressType: ${addressType}`,
+        address_remote: "",
+        port_remote: portRemote,
+        raw_data_index: 0,
+        is_udp: isUdp,
+        version,
+      };
+  }
+
+  return {
+    has_error: false,
+    message: "success",
+    address_remote: addressRemote,
+    port_remote: portRemote,
+    raw_data_index: currentIdx,
+    is_udp: isUdp,
+    version,
+  };
+}
 
 async function resolveIPv4(hostname) {
   if (IPV4_REGEX.test(hostname)) return hostname;
@@ -101,7 +294,7 @@ export async function ProtocolOverWSHandler(request, config) {
     .pipeTo(
       new WritableStream({
         async write(chunk, controller) {
-          if (udpStreamWriter) return udpStreamWriter.write(chunk);
+          if (udpStreamWriter) return udpStreamWriter(chunk);
           if (remoteSocketWapper.value) {
             const writer = remoteSocketWapper.value.writable.getWriter();
             try {
@@ -114,7 +307,7 @@ export async function ProtocolOverWSHandler(request, config) {
             return;
           }
           
-          const header = processHeader(new Uint8Array(chunk), config.userID);
+          const header = parseHeader(chunk, config.userID);
           if (header.has_error) throw new Error(header.message);
 
           address = header.address_remote;
@@ -126,7 +319,7 @@ export async function ProtocolOverWSHandler(request, config) {
             if (header.port_remote === 53) {
               const dnsPipeline = await createDnsPipeline(webSocket, vlessResponseHeader, log);
               udpStreamWriter = dnsPipeline.write;
-              udpStreamWriter(rawClientData);
+              await udpStreamWriter(rawClientData);
             } else {
               log(`udp:${header.port_remote} not supported (dns-only), closing gently`);
               safeCloseWebSocket(webSocket);
@@ -183,10 +376,14 @@ async function HandleTCPOutBound(
 
     remoteSocket.value = tcpSocket;
 
+    const writer = tcpSocket.writable.getWriter();
     try {
-      const writer = tcpSocket.writable.getWriter();
       await writer.write(rawClientData);
-      writer.releaseLock();
+      log("TCP write completed", {
+        byteLength: rawClientData.byteLength,
+        host: formattedHost,
+        port: Number(port),
+      });
       log(`connected to ${formattedHost}:${port}`);
       return tcpSocket;
     } catch (error) {
@@ -195,11 +392,20 @@ async function HandleTCPOutBound(
       } catch {}
       remoteSocket.value = null;
       throw error;
+    } finally {
+      writer.releaseLock();
     }
   }
 
   async function retryWithPool(pool, index) {
+    log("Retry pool entered", {
+      poolLength: pool.length,
+      index,
+    });
     if (index >= pool.length) {
+      log("Retry pool exhausted", {
+        poolLength: pool.length,
+      });
       await retryWithNAT64();
       return;
     }
@@ -224,42 +430,47 @@ async function HandleTCPOutBound(
       await retryWithPool(pool, index + 1);
     }
   }
+    
+async function retryWithNAT64() {
+  log("NAT64 fallback entered", {
+    enabled: config.nat64 !== false,
+  });
 
-  async function retryWithNAT64() {
-    if (config.nat64 === false) {
-      safeCloseWebSocket(webSocket);
-      return;
-    }
-
-    const ipv4 = await resolveIPv4(addressRemote);
-    const nat64Address = toNAT64Address(ipv4);
-
-    if (!nat64Address) {
-      log(`NAT64 fallback failed: could not resolve ${addressRemote}`);
-      safeCloseWebSocket(webSocket);
-      return;
-    }
-
-    log(`falling back to NAT64: ${nat64Address}`);
-
-    try {
-      const tcpSocket = await connectAndWrite(nat64Address, portRemote);
-
-      RemoteSocketToWS(
-        tcpSocket,
-        webSocket,
-        protocolResponseHeader,
-        null,
-        log,
-      ).catch((error) => {
-        console.error("NAT64 RemoteSocketToWS failed:", error.stack || error);
-        safeCloseWebSocket(webSocket);
-      });
-    } catch (error) {
-      log("NAT64 connect failed", error);
-      safeCloseWebSocket(webSocket);
-    }
+  if (config.nat64 === false) {
+    log("NAT64 fallback disabled");
+    safeCloseWebSocket(webSocket);
+    return;
   }
+
+  const ipv4 = await resolveIPv4(addressRemote);
+  const nat64Address = toNAT64Address(ipv4);
+
+  if (!nat64Address) {
+    log(`NAT64 fallback failed: could not resolve ${addressRemote}`);
+    safeCloseWebSocket(webSocket);
+    return;
+  }
+
+  log(`falling back to NAT64: ${nat64Address}`);
+
+  try {
+    const tcpSocket = await connectAndWrite(nat64Address, portRemote);
+
+    RemoteSocketToWS(
+      tcpSocket,
+      webSocket,
+      protocolResponseHeader,
+      null,
+      log,
+    ).catch((error) => {
+      console.error("NAT64 RemoteSocketToWS failed:", error.stack || error);
+      safeCloseWebSocket(webSocket);
+    });
+  } catch (error) {
+    log("NAT64 connect failed", error);
+    safeCloseWebSocket(webSocket);
+  }
+}
 
   try {
     const tcpSocket = await connectAndWrite(addressRemote, portRemote);
@@ -285,80 +496,159 @@ function MakeReadableWebSocketStream(webSocketServer, earlyDataHeader, log) {
     start(controller) {
       webSocketServer.addEventListener("message", (event) => {
         try {
-          controller.enqueue(event.data);
+          const data = event.data;
+          log("WebSocket message received", {
+            type: Object.prototype.toString.call(data),
+            byteLength: data?.byteLength ?? data?.size ?? null,
+          });
+          controller.enqueue(data);
         } catch (error) {
+          log("WebSocket message enqueue failed", {
+            message: error?.message,
+            stack: error?.stack,
+          });
           safeCloseWebSocket(webSocketServer);
         }
       });
+
       webSocketServer.addEventListener("close", () => {
         safeCloseWebSocket(webSocketServer);
         try {
           controller.close();
         } catch (error) {
-          log("stream already closed");
+          log("WebSocket stream already closed");
         }
       });
-      webSocketServer.addEventListener("error", (err) => {
-        log("webSocketServer has error");
-        controller.error(err);
+
+      webSocketServer.addEventListener("error", (error) => {
+        log("WebSocket server error", {
+          message: error?.message,
+        });
+        controller.error(error);
       });
+
       const { earlyData, error } = base64ToArrayBuffer(earlyDataHeader);
-      if (error) controller.error(error);
-      else if (earlyData) controller.enqueue(earlyData);
+
+      if (error) {
+        log("Early Data decoding failed", {
+          message: error?.message,
+        });
+        controller.error(error);
+      } else if (earlyData) {
+        log("Early Data received", {
+          byteLength: earlyData.byteLength,
+        });
+        controller.enqueue(earlyData);
+      }
     },
-    pull(_controller) {},
+
+    pull() {},
+
     cancel(reason) {
-      log(`ReadableStream was canceled, due to ${reason}`);
+      log("WebSocket stream canceled", {
+        reason: String(reason),
+      });
       safeCloseWebSocket(webSocketServer);
     },
   });
 }
 
-async function RemoteSocketToWS(remoteSocket, webSocket, protocolResponseHeader, retry, log) {
+
+async function RemoteSocketToWS(
+  remoteSocket,
+  webSocket,
+  protocolResponseHeader,
+  retry,
+  log,
+) {
   let hasIncomingData = false;
   let headerSent = false;
+
+  log("RemoteSocketToWS started");
 
   try {
     await remoteSocket.readable.pipeTo(
       new WritableStream({
         async write(chunk) {
-          if (webSocket.readyState !== CONST.WS_READY_STATE_OPEN)
+          log("TCP data received", {
+            byteLength: chunk.byteLength,
+            webSocketState: webSocket.readyState,
+          });
+
+          if (webSocket.readyState !== CONST.WS_READY_STATE_OPEN) {
             throw new Error("WebSocket is not open");
+          }
+
           hasIncomingData = true;
 
           let dataToSend = chunk;
+
           if (!headerSent && protocolResponseHeader) {
-            const merged = new Uint8Array(protocolResponseHeader.length + chunk.byteLength);
+            const merged = new Uint8Array(
+              protocolResponseHeader.length + chunk.byteLength,
+            );
+
             merged.set(protocolResponseHeader, 0);
             merged.set(new Uint8Array(chunk), protocolResponseHeader.length);
+
             dataToSend = merged.buffer;
             headerSent = true;
           }
 
           webSocket.send(dataToSend);
+
+          log("TCP data forwarded to WebSocket", {
+            byteLength: dataToSend.byteLength,
+          });
         },
+
         close() {
-          log(`Remote connection readable closed.`);
+          log("TCP-to-WebSocket stream completed", {
+            hasIncomingData,
+            headerSent,
+          });
         },
+
         abort(reason) {
-          console.error(`Remote connection readable aborted:`, reason);
+          log("TCP-to-WebSocket stream aborted", {
+            reason: String(reason),
+          });
         },
       }),
     );
   } catch (error) {
-    console.error(`RemoteSocketToWS error:`, error.stack || error);
-    safeCloseWebSocket(webSocket);
+    log("RemoteSocketToWS failed", {
+      name: error?.name,
+      message: error?.message,
+      stack: error?.stack,
+      hasIncomingData,
+    });
   }
 
+  log("RemoteSocketToWS completed", {
+    hasIncomingData,
+    retryAvailable: Boolean(retry),
+  });
+
   if (!hasIncomingData && retry) {
+    log("Retry started");
+
     try {
       await retry();
+      log("Retry completed");
     } catch (error) {
-      console.error("retry failed:", error.stack || error);
+      log("Retry failed", {
+        name: error?.name,
+        message: error?.message,
+        stack: error?.stack,
+      });
+
       safeCloseWebSocket(webSocket);
     }
+
     return;
   }
+
   safeCloseWebSocket(webSocket);
 }
 
@@ -388,18 +678,40 @@ function safeCloseWebSocket(socket) {
 }
 
 async function createDnsPipeline(webSocket, vlessResponseHeader, log) {
-  let isHeaderSent = false;
-  const transformStream = new TransformStream({
-    transform(chunk, controller) {
-      for (let index = 0; index < chunk.byteLength;) {
-        const lengthBuffer = chunk.slice(index, index + 2);
-        const udpPacketLength = new DataView(lengthBuffer).getUint16(0);
-        const udpData = new Uint8Array(chunk.slice(index + 2, index + 2 + udpPacketLength));
-        index = index + 2 + udpPacketLength;
-        controller.enqueue(udpData);
-      }
-    },
-  });
+  
+let isHeaderSent = false;
+let pending = new Uint8Array(0);
+
+const transformStream = new TransformStream({
+  transform(chunk, controller) {
+    const incoming =
+      chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk);
+
+    const data = new Uint8Array(pending.length + incoming.length);
+    data.set(pending, 0);
+    data.set(incoming, pending.length);
+
+    let offset = 0;
+
+    while (data.length - offset >= 2) {
+      const udpPacketLength = (data[offset] << 8) | data[offset + 1];
+      const frameLength = udpPacketLength + 2;
+
+      if (data.length - offset < frameLength) break;
+
+      controller.enqueue(data.slice(offset + 2, offset + frameLength));
+      offset += frameLength;
+    }
+
+    pending = data.slice(offset);
+  },
+
+  flush() {
+    if (pending.length !== 0) {
+      throw new Error("Incomplete DNS-over-WebSocket frame");
+    }
+  },
+});
 
   transformStream.readable
     .pipeTo(
