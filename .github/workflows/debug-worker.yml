@@ -1,0 +1,166 @@
+
+name: Worker 1101 Debug
+
+on:
+  workflow_dispatch:
+    inputs:
+      test:
+        description: Select one isolated Worker test
+        required: true
+        type: choice
+        options:
+          - baseline
+          - plain
+          - obfuscated
+          - core
+          - clash
+          - network
+          - routes
+          - core-config
+          - core-constants
+          - core-utils
+          - core-async
+          - clash-runtime
+          - routes-panel
+          - router
+          - sockets
+          - tcp-probe
+
+permissions:
+  contents: read
+
+concurrency:
+  group: worker-1101-debug
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.ref == 'refs/heads/debug/worker-1101'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - name: Checkout debug branch
+        uses: actions/checkout@v4
+
+      - name: Validate Cloudflare credentials
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "::error::CLOUDFLARE_API_TOKEN or CLOUDFLARE_ACCOUNT_ID is missing."
+            exit 1
+          fi
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Wrangler
+        run: npm install --global wrangler@4.86.0
+
+      - name: Deploy independent TCP probe
+        if: inputs.test == 'tcp-probe'
+        run: wrangler deploy --config wrangler.tcp-probe.toml
+
+      - name: Deploy baseline Worker
+        if: inputs.test == 'baseline'
+        run: wrangler deploy --config wrangler.debug.toml
+
+      - name: Prepare module probe
+        if: contains(fromJSON('["core","clash","network","routes","core-config","core-constants","core-utils","core-async","clash-runtime","routes-panel","router","sockets"]'), inputs.test)
+        env:
+          DEBUG_TEST: ${{ inputs.test }}
+        run: |
+          case "$DEBUG_TEST" in
+            core)
+              module="core"
+              worker="syncc-1101-debug-probe-core"
+              ;;
+            clash)
+              module="clash"
+              worker="syncc-1101-debug-probe-clash"
+              ;;
+            network)
+              module="network"
+              worker="syncc-1101-debug-probe-network"
+              ;;
+            routes)
+              module="routes"
+              worker="syncc-1101-debug-probe-routes"
+              base64 -w0 index.html > src/panel.b64
+              ;;
+            router)
+              module="router"
+              worker="syncc-1101-debug-router"
+              base64 -w0 index.html > src/panel.b64
+              ;;
+            sockets)
+              module="sockets"
+              worker="syncc-1101-debug-sockets"
+              ;;
+            core-config|core-constants|core-utils|core-async|clash-runtime|routes-panel)
+              module="$DEBUG_TEST"
+              worker="syncc-1101-debug-$DEBUG_TEST"
+              if [ "$DEBUG_TEST" = "routes-panel" ]; then
+                base64 -w0 index.html > src/panel.b64
+              fi
+              ;;
+            *)
+              exit 1
+              ;;
+          esac
+          
+          echo "PROBE_MODULE=$module" >> "$GITHUB_ENV"
+          echo "PROBE_WORKER=$worker" >> "$GITHUB_ENV"
+          
+          cat > wrangler.debug.toml <<EOF
+          name = "$worker"
+          main = "debug/probe-$module.js"
+          compatibility_date = "2025-09-01"
+          
+          [[rules]]
+          type = "Text"
+          globs = ["**/*.b64"]
+          fallthrough = true
+          EOF
+
+      - name: Bundle module probe
+        if: contains(fromJSON('["core","clash","network","routes","core-config","core-constants","core-utils","core-async","clash-runtime","routes-panel","router","sockets"]'), inputs.test)
+        run: wrangler deploy --dry-run --outdir dist --config wrangler.debug.toml
+
+      - name: Deploy module probe
+        if: contains(fromJSON('["core","clash","network","routes","core-config","core-constants","core-utils","core-async","clash-runtime","routes-panel","router","sockets"]'), inputs.test)
+        run: wrangler deploy "dist/probe-$PROBE_MODULE.js" --config wrangler.debug.toml --name "$PROBE_WORKER"
+
+      - name: Prepare source asset
+        if: inputs.test == 'plain' || inputs.test == 'obfuscated'
+        run: |
+          base64 -w0 index.html > src/panel.b64
+          cat > wrangler.build.debug.toml <<'EOF'
+          name = "syncc-1101-debug-plain"
+          main = "index.js"
+          compatibility_date = "2025-09-01"
+
+          [[rules]]
+          type = "Text"
+          globs = ["**/*.html", "**/*.b64"]
+          fallthrough = true
+          EOF
+
+      - name: Bundle plain Worker
+        if: inputs.test == 'plain' || inputs.test == 'obfuscated'
+        run: wrangler deploy --dry-run --outdir dist --config wrangler.build.debug.toml
+
+      - name: Deploy plain Worker
+        if: inputs.test == 'plain'
+        run: wrangler deploy dist/index.js --config wrangler.build.debug.toml --name syncc-1101-debug-plain
+
+      - name: Obfuscate Worker bundle
+        if: inputs.test == 'obfuscated'
+        run: node scripts/obfuscate.js dist/index.js
+
+      - name: Deploy obfuscated Worker
+        if: inputs.test == 'obfuscated'
+        run: wrangler deploy worker.js --config wrangler.build.debug.toml --name syncc-1101-debug-obfuscated
