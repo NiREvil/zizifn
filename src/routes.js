@@ -3,13 +3,12 @@ import {
   safeFetch,
   isInIgnoredRange,
   pick,
-  CONST,
   SENS,
   buildMainDomains,
   buildSubscriptionHeaders,
   buildSettingsUrl,
   resolveIPv4ViaDoH,
-  fetchDomainIpPool,
+  fetchZizifnProxyPool,
   countryCodeToFlagEmoji,
   cacheGetJson,
   cachePutJson,
@@ -22,9 +21,18 @@ import panelB64 from "./panel.b64";
 let panelHtml = null;
 function getPanelHtml() {
   if (!panelHtml) {
-    panelHtml = new TextDecoder("utf-8").decode(
-      Uint8Array.from(atob(panelB64), (c) => c.charCodeAt(0)),
-    );
+    try {
+      if (typeof panelB64 === "string" && panelB64.length > 0) {
+        panelHtml = new TextDecoder("utf-8").decode(
+          Uint8Array.from(atob(panelB64), (c) => c.charCodeAt(0)),
+        );
+      } else {
+        throw new Error("panelB64 is empty or invalid");
+      }
+    } catch (e) {
+      console.error("Failed to decode panelB64, using fallback panel HTML:", e);
+      panelHtml = `<!DOCTYPE html><html><head><title>VLESS Proxy Panel</title></head><body><h1>VLESS Worker Config</h1><p>Dream Config: {{CONFIG_DREAM}}</p></body></html>`;
+    }
   }
   return panelHtml;
 }
@@ -138,7 +146,26 @@ export async function handleIpSubscription(
 
   if (cfg) {
     try {
-      const pool = await buildProxyIpPool(cfg, ctx, hostName);
+      const dataset = await fetchZizifnProxyPool(ctx);
+
+      const pool = dataset.proxies
+        .filter((entry) => entry?.ip && !isInIgnoredRange(entry.ip))
+        .map((entry) => ({
+          ip: entry.ip,
+          port: entry.port || 443,
+          country: entry.country || "Unknown",
+          countryCode: entry.country
+            ? entry.country.toUpperCase()
+            : "",
+          score:
+            typeof entry.score === "number"
+              ? entry.score
+              : 999,
+          risk: entry.risk || "Unknown",
+          host: entry.isp || "ProxyIP",
+          hostType: "ip",
+        }));
+
       const sorted = [...pool].sort((a, b) => (a.score ?? 999) - (b.score ?? 999));
 
       const selected = [];
@@ -431,86 +458,6 @@ async function getIpMeta(ctx, ip) {
   return meta;
 }
 
-async function enrichWithPersistentCache(ctx, entries) {
-  return Promise.all(
-    entries.map(async (entry) => {
-      if (entry.country && entry.country !== "Unknown") return entry;
-      const cacheKey = `ipmeta:${entry.ip}`;
-      const cached = await cacheGetJson(cacheKey);
-      if (cached) return { ...entry, ...cached };
-      const meta = await getIpMeta(ctx, entry.ip);
-      return { ...entry, ...meta };
-    }),
-  );
-}
-
-async function resolveProxyPoolHost(host, port, ctx) {
-  const isIPHost = /^\d{1,3}(\.\d{1,3}){3}$/.test(host);
-
-  if (isIPHost) {
-    if (isInIgnoredRange(host)) return [];
-    const meta = await getIpMeta(ctx, host);
-    return [{ host, port, ip: host, hostType: "ip", ...meta }];
-  }
-
-  let pool = await fetchDomainIpPool(host);
-  if (!pool.length) {
-    const single = await resolveIPv4ViaDoH(host);
-    if (single) {
-      const meta = await getIpMeta(ctx, single);
-      pool = [{ ip: single, ...meta }];
-    }
-  }
-
-  pool = pool.filter((p) => p.ip && !isInIgnoredRange(p.ip)).slice(0, 15);
-  pool = await enrichWithPersistentCache(ctx, pool);
-
-  return pool.map((p) => ({
-    host,
-    port,
-    ip: p.ip,
-    hostType: "domain",
-    country: p.country,
-    countryCode: p.countryCode,
-    score: p.score,
-    risk: p.risk,
-  }));
-}
-
-async function buildProxyIpPool(cfg, ctx, hostName, forceRefresh = false) {
-  const cache = caches.default;
-  const poolCacheKey = new Request(`https://cf-proxyip-pool-cache.local/${hostName}`);
-  if (ctx && !forceRefresh) {
-    const cachedRes = await cache.match(poolCacheKey);
-    if (cachedRes) return cachedRes.json();
-  }
-
-  const seenHosts = new Set();
-  const hosts = (cfg.proxyPool || [])
-    .map((raw) => {
-      const [host, port = "443"] = raw.split(":");
-      return { host, port };
-    })
-    .filter(({ host }) => {
-      if (!host || seenHosts.has(host)) return false;
-      seenHosts.add(host);
-      return true;
-    });
-
-  const results = (
-    await Promise.all(hosts.map(({ host, port }) => resolveProxyPoolHost(host, port, ctx)))
-  ).flat();
-
-  if (ctx && results.length) {
-    const cacheResponse = new Response(JSON.stringify(results), {
-      headers: { "Content-Type": "application/json", "Cache-Control": "public, max-age=21600" },
-    });
-    ctx.waitUntil(cache.put(poolCacheKey, cacheResponse));
-  }
-
-  return results;
-}
-
 function proxyEntryTag(entry, index) {
   const countryTag = entry.countryCode
     ? entry.countryCode.toUpperCase()
@@ -583,37 +530,62 @@ export async function handleProxyIpsInfo(request, cfg, hostName, ctx, env) {
     const forceRefresh = url.searchParams.get("refresh") === "1";
 
     const cache = caches.default;
-    const cacheKey = new Request(`https://cf-proxyips-cache.local/${hostName}`);
+    const cacheKey = new Request(
+      `https://cf-proxyips-cache.local/${hostName}`,
+    );
+
     if (!forceRefresh) {
       const cached = await cache.match(cacheKey);
       if (cached) return cached;
     }
 
-    const enriched = await buildProxyIpPool(cfg, ctx, hostName, forceRefresh);
+    const dataset = await fetchZizifnProxyPool(ctx);
 
     const countryMap = new Map();
-    enriched.forEach((entry) => {
-      const countryKey = entry.country || "Unknown";
-      if (!countryMap.has(countryKey)) {
-        countryMap.set(countryKey, {
-          country: countryKey,
-          countryCode: entry.countryCode || "",
+
+    for (const proxy of dataset.proxies) {
+      if (!proxy?.ip || isInIgnoredRange(proxy.ip)) continue;
+
+      const country = proxy.country || "Unknown";
+      const countryCode = (country === "Unknown"
+        ? ""
+        : country
+      ).toUpperCase();
+
+      if (!countryMap.has(country)) {
+        countryMap.set(country, {
+          country,
+          countryCode,
           hostsMap: new Map(),
         });
       }
-      const countryGroup = countryMap.get(countryKey);
-      if (!countryGroup.countryCode && entry.countryCode)
-        countryGroup.countryCode = entry.countryCode;
-      const hostKey = entry.host;
-      if (!countryGroup.hostsMap.has(hostKey)) {
-        countryGroup.hostsMap.set(hostKey, {
-          host: hostKey,
-          hostType: entry.hostType,
+
+      const countryGroup = countryMap.get(country);
+
+      const host = proxy.isp || "ProxyIP";
+
+      if (!countryGroup.hostsMap.has(host)) {
+        countryGroup.hostsMap.set(host, {
+          host,
+          hostType: "ip",
           entries: [],
         });
       }
-      countryGroup.hostsMap.get(hostKey).entries.push(entry);
-    });
+
+      countryGroup.hostsMap.get(host).entries.push({
+        host,
+        ip: proxy.ip,
+        port: proxy.port || 443,
+        hostType: "ip",
+        country,
+        countryCode,
+        score:
+          typeof proxy.score === "number"
+            ? proxy.score
+            : null,
+        risk: proxy.risk || "Unknown",
+      });
+    }
 
     const groups = [...countryMap.values()]
       .map((countryGroup) => {
@@ -622,17 +594,28 @@ export async function handleProxyIpsInfo(request, cfg, hostName, ctx, env) {
             const sortedEntries = [...hostGroup.entries].sort(
               (a, b) => (a.score ?? 999) - (b.score ?? 999),
             );
+
             return {
               host: hostGroup.host,
               hostType: hostGroup.hostType,
               entries: sortedEntries.map((entry, i) =>
-                buildProxyEntryConfigs(entry, hostName, cfg.userID, i),
+                buildProxyEntryConfigs(
+                  entry,
+                  hostName,
+                  cfg.userID,
+                  i,
+                ),
               ),
             };
           })
-          .sort((a, b) => (a.entries[0]?.score ?? 999) - (b.entries[0]?.score ?? 999));
+          .sort(
+            (a, b) =>
+              (a.entries[0]?.score ?? 999) -
+              (b.entries[0]?.score ?? 999),
+          );
 
         const lowestEntry = hosts[0]?.entries[0];
+
         return {
           country: countryGroup.country,
           countryCode: countryGroup.countryCode,
@@ -642,13 +625,34 @@ export async function handleProxyIpsInfo(request, cfg, hostName, ctx, env) {
           hosts,
         };
       })
-      .sort((a, b) => (a.lowestScore ?? 999) - (b.lowestScore ?? 999));
+      .sort(
+        (a, b) =>
+          (a.lowestScore ?? 999) -
+          (b.lowestScore ?? 999),
+      );
 
-    const response = new Response(JSON.stringify({ groups }), { headers });
-    if (groups.length) ctx.waitUntil(cache.put(cacheKey, response.clone()));
+    const response = new Response(JSON.stringify({ groups }), {
+      headers,
+    });
+
+    if (groups.length) {
+      ctx.waitUntil(cache.put(cacheKey, response.clone()));
+    }
+
     return response;
-  } catch (e) {
-    return new Response(JSON.stringify({ groups: [], error: e.toString() }), { headers });
+  } catch (error) {
+    console.error("ProxyIP info failed:", error);
+
+    return new Response(
+      JSON.stringify({
+        groups: [],
+        error: "ProxyIP dataset unavailable",
+      }),
+      {
+        status: 503,
+        headers,
+      },
+    );
   }
 }
 
